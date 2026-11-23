@@ -1,36 +1,94 @@
 <!doctype html>
 <html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Входящие заявки</title>
-  <style>
-    body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
-    textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
-    button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
-  </style>
-</head>
-<body>
-  <h1>Входящие заявки</h1>
-  <form>
-    <label for="message">Текст заявки</label>
-    <textarea id="message" rows="4"></textarea>
-    <button type="submit">Разобрать заявку</button>
-  </form>
-  <pre id="result" aria-live="polite"></pre>
-  <script type="module">
-    const form = document.querySelector("form");
-    const result = document.querySelector("#result");
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Входящие заявки</title>
+    <style>
+      body {
+        max-width: 40rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        font:
+          1rem/1.5 system-ui,
+          sans-serif;
+      }
+      textarea {
+        box-sizing: border-box;
+        display: block;
+        width: 100%;
+        margin: 0.5rem 0;
+        padding: 0.5rem;
+        font: inherit;
+      }
+      button {
+        padding: 0.4rem 0.8rem;
+        font: inherit;
+      }
+      #result {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Входящие заявки</h1>
+    <form>
+      <label for="message">Текст заявки</label>
+      <textarea id="message" rows="4"></textarea>
+      <button type="submit">Разобрать заявку</button>
+    </form>
+    <p id="result" role="status"></p>
+    <script type="module">
+      const form = document.querySelector("form");
+      const result = document.querySelector("#result");
+      const message = document.querySelector("#message");
+      const topics = {
+        delivery: "Доставка",
+        pricing: "Стоимость",
+        other: "Другое",
+      };
+      const manualReview =
+        "Разберите заявку вручную. Прочитайте текст и подготовьте ответ клиенту.";
+      const invalidInput = "Введите текст заявки.";
+      let revision = 0;
+
+      message.addEventListener("input", () => {
+        revision++;
+        result.textContent = "";
       });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
-    });
-  </script>
-</body>
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const submitted = ++revision;
+        const text = message.value.trim();
+        if (!text) {
+          result.textContent = invalidInput;
+          message.focus();
+          return;
+        }
+
+        result.textContent = "Разбираем заявку…";
+        try {
+          const reply = await fetch("/api/triage", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+          });
+          const data = await reply.json();
+          if (submitted !== revision) return;
+          if (reply.ok && data.status === "ready") {
+            result.textContent = `Тема: ${topics[data.topic]}\nЧерновик ответа: ${data.draft}`;
+          } else {
+            result.textContent =
+              reply.status === 400 && data.status === "invalid_input"
+                ? invalidInput
+                : manualReview;
+          }
+        } catch {
+          if (submitted === revision) result.textContent = manualReview;
+        }
+      });
+    </script>
+  </body>
 </html>
