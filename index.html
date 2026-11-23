@@ -1,36 +1,155 @@
 <!doctype html>
 <html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Входящие заявки</title>
-  <style>
-    body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
-    textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
-    button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
-  </style>
-</head>
-<body>
-  <h1>Входящие заявки</h1>
-  <form>
-    <label for="message">Текст заявки</label>
-    <textarea id="message" rows="4"></textarea>
-    <button type="submit">Разобрать заявку</button>
-  </form>
-  <pre id="result" aria-live="polite"></pre>
-  <script type="module">
-    const form = document.querySelector("form");
-    const result = document.querySelector("#result");
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Входящие заявки</title>
+    <style>
+      body {
+        max-width: 40rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        font:
+          1rem/1.5 system-ui,
+          sans-serif;
+      }
+      textarea {
+        box-sizing: border-box;
+        display: block;
+        width: 100%;
+        margin: 0.5rem 0;
+        padding: 0.5rem;
+        font: inherit;
+      }
+      button {
+        padding: 0.4rem 0.8rem;
+        font: inherit;
+      }
+      #result {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Входящие заявки</h1>
+    <form>
+      <label for="message">Текст заявки</label>
+      <textarea id="message" rows="4"></textarea>
+      <p>
+        <label for="mode">Режим проверки</label>
+        <select id="mode">
+          <option value="normal">Обычный</option>
+          <option value="random">Демо · случайный результат</option>
+          <option value="ready">Успех</option>
+          <option value="[timeout]">Таймаут</option>
+          <option value="[error]">Ошибка модели</option>
+          <option value="[bad-json]">Некорректный JSON</option>
+          <option value="[bad-topic]">Неизвестная тема</option>
+          <option value="[empty-draft]">Пустой черновик</option>
+        </select>
+      </p>
+      <button type="submit">Разобрать заявку</button>
+    </form>
+    <p id="result" role="status"></p>
+    <script type="module">
+      const form = document.querySelector("form");
+      const result = document.querySelector("#result");
+      const message = document.querySelector("#message");
+      const topics = {
+        delivery: "Доставка",
+        pricing: "Стоимость",
+        other: "Другое",
+      };
+      const manualReview =
+        "Разберите заявку вручную. Прочитайте текст и подготовьте ответ клиенту.";
+      const invalidInput = "Введите текст заявки.";
+      let revision = 0;
+
+      const mode = document.querySelector("#mode");
+      const failures = Array.from(mode.options).filter((option) =>
+        option.value.startsWith("["),
+      );
+      if (location.hash === "#demo") mode.value = "random";
+
+      /** Let a marker in the original message take precedence over the demo selector. */
+      function chooseScenario(text) {
+        const explicit = failures.find((option) =>
+          text.toLowerCase().includes(option.value),
+        );
+        if (explicit) return explicit;
+        if (mode.value !== "random") return mode.selectedOptions[0];
+        return Math.random() < 0.5
+          ? mode.querySelector('[value="ready"]')
+          : failures[Math.floor(Math.random() * failures.length)];
+      }
+
+      /** Keep each demo step visible long enough to read. */
+      function pauseDemo() {
+        return new Promise((resolve) =>
+          setTimeout(resolve, 700 + Math.random() * 800),
+        );
+      }
+
+      /** Ignore pending responses after either the message or the scenario changes. */
+      function clearResult() {
+        revision++;
+        result.textContent = "";
+      }
+      message.addEventListener("input", clearResult);
+      mode.addEventListener("change", clearResult);
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const submitted = ++revision;
+        const text = message.value.trim();
+        if (!text) {
+          result.textContent = invalidInput;
+          message.focus();
+          return;
+        }
+
+        const scenario = mode.value === "normal" ? null : chooseScenario(text);
+        let requestText = text;
+        if (scenario) {
+          result.textContent = "Готовим тестовый запрос…";
+          await pauseDemo();
+          if (submitted !== revision) return;
+          if (
+            scenario.value !== "ready" &&
+            !text.toLowerCase().includes(scenario.value)
+          ) {
+            requestText += " " + scenario.value;
+          }
+        }
+        result.textContent = "Разбираем заявку…";
+        try {
+          const reply = await fetch("/api/triage", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: requestText }),
+          });
+          const data = await reply.json();
+          if (submitted !== revision) return;
+          if (scenario) {
+            result.textContent = "Ответ API получен. Готовим результат…";
+            await pauseDemo();
+            if (submitted !== revision) return;
+          }
+          if (reply.ok && data.status === "ready") {
+            result.textContent = `Тема: ${topics[data.topic]}\nЧерновик ответа: ${data.draft}`;
+          } else {
+            result.textContent =
+              reply.status === 400 && data.status === "invalid_input"
+                ? invalidInput
+                : manualReview;
+          }
+          if (scenario)
+            result.textContent += "\nДемосценарий: " + scenario.label;
+        } catch {
+          if (submitted === revision) result.textContent = manualReview;
+        }
       });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
-    });
-  </script>
-</body>
+    </script>
+  </body>
 </html>
